@@ -1,6 +1,8 @@
 /* eslint-disable no-unused-vars */
 /* eslint-disable no-undef */
 
+// As usual, there's some broken row/col logic here
+
 let CanvasHeight = 800;
 let CanvasWidth = 400;
 
@@ -109,30 +111,51 @@ function setup() {
   sliderRange(1, 1000000, 1);
   gui.addGlobals('Seed');
 
-  noLoop();
+  gui.addGlobals('MirrorCols')
 
-  randomSeed(Seed);
-  noiseSeed(Seed);
+  noLoop();
 
   createCanvas(CanvasWidth, CanvasHeight);
 }
 
 function draw() {
+  randomSeed(Seed);
+  noiseSeed(Seed);
+
   background(120);
   voronoiClearSites();
   const initialPoints = makeInitialVoronoiPoints();
   const finalPoints = initialPoints.flatMap(([x, y]) => {
     const points = maybeRepeatPoint({x, y});
-    const c = color(random(0, 255), random(0, 255), random(0, 255));
-    for (let point of points) {
-      voronoiSite(point[0], point[1], c)
-    }
     return points;
   })
   console.log({finalPoints})
-  // voronoiSites(finalPoints)
-  voronoi(CanvasWidth, CanvasHeight, true);
-  voronoiDraw(0, 0, true, false);
+
+  const delaunay = d3.Delaunay.from(finalPoints);
+  console.log({delaunay});
+  const voronoi = delaunay.voronoi([0, 0, CanvasWidth, CanvasHeight]);
+  const cells = voronoi.cellPolygons()
+  console.log({cells})
+
+  let i = 0;
+  for (let cell of cells) {
+    fill(255, 255, 255);
+    beginShape();
+    for (let point of cell) {
+      vertex(point[0], point[1]);
+    }
+    endShape(CLOSE);
+
+    // draw point 
+    const x = finalPoints[i][0];
+    const y = finalPoints[i][1];
+    fill(0, 0, 0);
+    ellipse(x, y, 2, 2);
+
+    i++;
+  }
+
+
   // drawCells();
 
 }
