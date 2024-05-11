@@ -1,7 +1,15 @@
 /* eslint-disable no-unused-vars */
 /* eslint-disable no-undef */
 
-// As usual, there's some broken row/col logic here
+/*
+
+current status:
+- seems like it's always picking polys around the original cell index, and not branching out
+
+*/
+
+var ShowPoints = false;
+var ShowCells = false;
 
 let CanvasHeight = 800;
 let CanvasWidth = 400;
@@ -17,6 +25,8 @@ var MaxCols = 3;
 
 var MirrorCols = true;
 var MirrorRows = true;
+
+var EarlyJoinBailoutChance = 0.5;
 
 var Seed = 99;
 
@@ -100,11 +110,9 @@ function makeInitialVoronoiPoints() {
           (rowSubdivisionSize / numCols) * col +
           rowSubdivisionSize / numCols / 2;
         const rowHeight = height / numRows;
-        const y =
-          rowHeight * row +
-          rowHeight / 2 +
+        const y = rowHeight * row + rowHeight / 2; /*+
           (noise(row, col % 2) - 0.5) * rowHeight +
-          ((noise(row) - 0.5) * rowHeight) / 2;
+          ((noise(row) - 0.5) * rowHeight) / 2;*/
         console.log({
           row,
           col,
@@ -127,7 +135,7 @@ async function setup() {
   const gui = createGui("My awesome GUI");
   gui.setPosition(CanvasWidth + 100, 50);
 
-  sliderRange(1, 10, 1);
+  sliderRange(1, 100, 1);
   gui.addGlobals(
     "NumRepeatCols",
     "NumRepeatRows",
@@ -139,7 +147,7 @@ async function setup() {
   sliderRange(1, 1000000, 1);
   gui.addGlobals("Seed");
 
-  gui.addGlobals("MirrorCols");
+  gui.addGlobals("MirrorCols", "ShowCells", "ShowPoints");
 
   noLoop();
 
@@ -175,28 +183,31 @@ function reprocessCells({ voronoi, labels }) {
 
   const polygonUseMap = [];
   const finalPolys = [];
+  // TODO: this is horribly inefficient due to array re-allocation
+  let allPolygonIndices = [...Array(labels.length).keys()];
 
   function makeOneRun() {
     const cells = [...voronoi.cellPolygons()];
-    const randomCellIndex = Math.floor(random(cells.length));
-    let currentCellIndex = randomCellIndex;
-    let polygonInProgress = makeClipperPathFromPointsArray(cells[randomCellIndex]);
+    let currentCellIndex = allPolygonIndices.pop();
 
-    if (polygonUseMap[randomCellIndex]) {
-      return;
+    if (polygonUseMap[currentCellIndex]) {
+      return false;
     }
 
-    polygonUseMap[randomCellIndex] = true;
+    let polygonInProgress = makeClipperPathFromPointsArray(
+      cells[currentCellIndex]
+    );
+
+    polygonUseMap[currentCellIndex] = true;
 
     let numJoinsPerformed = 0;
     while (numJoinsPerformed < MaxJoins) {
-      const neighbors = voronoi.neighbors(randomCellIndex);
+      const neighbors = voronoi.neighbors(currentCellIndex);
       const unusedNeighbors = [
         ...neighbors.filter((neighborIndex) => {
           return !polygonUseMap[neighborIndex];
         }),
       ];
-      console.log({ neighbors, unusedNeighbors });
 
       if (unusedNeighbors.length == 0) {
         break;
@@ -204,8 +215,9 @@ function reprocessCells({ voronoi, labels }) {
       // pick a random neighbor
       const randomNeighborIndex = _.sample(unusedNeighbors);
       polygonUseMap[randomNeighborIndex] = true;
-
-      console.log({ randomNeighborIndex }, cells[randomNeighborIndex]);
+      allPolygonIndices = allPolygonIndices.filter(
+        (index) => index != randomNeighborIndex
+      );
 
       const clipperPath2 = makeClipperPathFromPointsArray(
         cells[randomNeighborIndex]
@@ -217,23 +229,29 @@ function reprocessCells({ voronoi, labels }) {
         FillRule.NonZero,
         2
       );
-      console.log({ polygonInProgress });
 
-      numJoinsPerformed += 1
+      numJoinsPerformed += 1;
 
       currentCellIndex = randomNeighborIndex;
+
+      if (random() < EarlyJoinBailoutChance) {
+        break;
+      }
     }
 
-    const unionedPointsPath = getPointsArraysFromClipperPaths(polygonInProgress);
+    const unionedPointsPath =
+      getPointsArraysFromClipperPaths(polygonInProgress);
 
     finalPolys.push(unionedPointsPath[0]);
+    return true;
   }
 
-  makeOneRun();
+  while (allPolygonIndices.length > 0) {
+    makeOneRun();
+  }
 
   finalPolys.forEach((poly) => {
-    console.log({ poly });
-    fill(0, 0, 100, 100);
+    fill(random(255), random(255), random(255));
     beginShape();
     for (let point of poly) {
       vertex(point[0], point[1]);
@@ -251,7 +269,6 @@ function draw() {
   noiseSeed(Seed);
 
   background(120);
-  voronoiClearSites();
   const initialPoints = makeInitialVoronoiPoints();
 
   let labels = [];
@@ -261,36 +278,40 @@ function draw() {
     return points;
   });
 
-  console.log({ finalPoints });
 
   const delaunay = d3.Delaunay.from(finalPoints);
-  console.log({ delaunay });
   const voronoi = delaunay.voronoi([0, 0, CanvasWidth, CanvasHeight]);
   const cells = voronoi.cellPolygons();
-  console.log({ cells });
+
+  reprocessCells({ voronoi, labels });
 
   let i = 0;
   for (let cell of cells) {
-    fill(255, 255, 255);
-    beginShape();
+    if (ShowCells) {
+      fill(255, 255, 255, 0);
+      beginShape();
 
-    for (let point of cell) {
-      vertex(point[0], point[1]);
+      for (let point of cell) {
+        vertex(point[0], point[1]);
+      }
+      endShape(CLOSE);
     }
-    endShape(CLOSE);
 
     // draw point
-    const x = finalPoints[i][0];
-    const y = finalPoints[i][1];
-    fill(0, 0, 0);
-    ellipse(x, y, 2, 2);
+    if (ShowPoints) {
+      const x = finalPoints[i][0];
+      const y = finalPoints[i][1];
+      fill(0, 0, 0);
+      ellipse(x, y, 2, 2);
+    }
 
     i++;
 
     // const clipperPath = makeClipperPathFromPointsArray(cell)
     // console.log({clipperPath})
     // const { InflatePathsD, JoinType, EndType } = Clipper2Z;
-    // const deflated = InflatePathsD(clipperPath, -10, JoinType.Round, EndType.Polygon, 20, 0, 10);
+    // const deflated1 = InflatePathsD(clipperPath, 10, JoinType.Round, EndType.Polygon, 20, 1, 5);
+    // const deflated = InflatePathsD(clipperPath, -20, JoinType.Round, EndType.Polygon, 20, 1, 5);
     // console.log(deflated.size())
     // const shapes = getPointsArraysFromClipperPaths(deflated);
     // for (let shape of shapes) {
@@ -302,8 +323,6 @@ function draw() {
     //   endShape(CLOSE);
     // }
   }
-
-  reprocessCells({ voronoi, labels });
 }
 
 // Clipper Utility functions
