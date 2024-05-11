@@ -9,6 +9,8 @@ let CanvasWidth = 400;
 var NumRepeatCols = 1;
 var NumRepeatRows = 6;
 
+const MaxJoins = 10;
+
 var MaxRowSubdivisions = 3;
 var MaxRows = 3;
 var MaxCols = 3;
@@ -29,35 +31,43 @@ function drawCells() {
       const x = col * width;
       const y = row * height;
       noStroke();
-      if (row == 0 && col == 0)  {
-        fill(color(255, 204, 0, 100))
+      if (row == 0 && col == 0) {
+        fill(color(255, 204, 0, 100));
       } else {
-        fill(color(noise(row, col)*255, noise(row, col)*255, noise(row, col)*255, 100));
+        fill(
+          color(
+            noise(row, col) * 255,
+            noise(row, col) * 255,
+            noise(row, col) * 255,
+            100
+          )
+        );
       }
       rect(x, y, width, height);
     }
   }
 }
 
-
-function maybeRepeatPoint({x, y}) {
+function maybeRepeatPoint({ x, y, index }) {
   let points = [];
+  let labels = [];
 
   for (let row = 0; row < NumRepeatRows; row++) {
     for (let col = 0; col < NumRepeatCols; col++) {
       const ColWidth = CanvasWidth / NumRepeatCols;
-      let canvasX = col * CanvasWidth / NumRepeatCols + x;
-      console.log({col})
-      if (MirrorCols && ((col %2) == 0)) {
-        console.log({col, row}, "mirroring")
+      let canvasX = (col * CanvasWidth) / NumRepeatCols + x;
+      console.log({ col });
+      if (MirrorCols && col % 2 == 0) {
+        console.log({ col, row }, "mirroring");
         canvasX = (col + 1) * ColWidth - x;
       }
-      const canvasY = row * CanvasHeight / NumRepeatRows + y;
+      const canvasY = (row * CanvasHeight) / NumRepeatRows + y;
       points.push([canvasX, canvasY]);
+      labels.push(`${index}`);
     }
   }
 
-  return points;
+  return { points, labels };
 }
 
 function makeInitialVoronoiPoints() {
@@ -75,25 +85,37 @@ function makeInitialVoronoiPoints() {
   const numRows = MaxRows;
   for (let row = 0; row < numRows; row++) {
     const rowSubdivisions = Math.round(random(1, MaxRowSubdivisions));
-    for (let rowSubdivision = 0; rowSubdivision < rowSubdivisions; rowSubdivision++) {
+    for (
+      let rowSubdivision = 0;
+      rowSubdivision < rowSubdivisions;
+      rowSubdivision++
+    ) {
       const rowSubdivisionSize = width / rowSubdivisions;
       const startingX = rowSubdivisionSize * rowSubdivision;
 
       const numCols = Math.round(random(1, MaxCols));
       for (let col = 0; col < numCols; col++) {
-        const x = startingX + (rowSubdivisionSize / numCols) * col + (rowSubdivisionSize / numCols) / 2
+        const x =
+          startingX +
+          (rowSubdivisionSize / numCols) * col +
+          rowSubdivisionSize / numCols / 2;
         const rowHeight = height / numRows;
-        const y = rowHeight * row + rowHeight / 2
-          + (noise(row, col % 2) - 0.5) * rowHeight
-          + (noise(row) - 0.5) * rowHeight / 2;
+        const y =
+          rowHeight * row +
+          rowHeight / 2 +
+          (noise(row, col % 2) - 0.5) * rowHeight +
+          ((noise(row) - 0.5) * rowHeight) / 2;
         console.log({
-          row, col,
-          numRows, numCols,
-          x, y
-        })
+          row,
+          col,
+          numRows,
+          numCols,
+          x,
+          y,
+        });
 
         // const c = color(random(0, 255), random(0, 255), random(0, 255));
-        points.push([x, y])        
+        points.push([x, y]);
       }
     }
   }
@@ -102,16 +124,22 @@ function makeInitialVoronoiPoints() {
 }
 
 async function setup() {
-  const gui = createGui('My awesome GUI');
+  const gui = createGui("My awesome GUI");
   gui.setPosition(CanvasWidth + 100, 50);
 
   sliderRange(1, 10, 1);
-  gui.addGlobals('NumRepeatCols', 'NumRepeatRows', 'MaxRowSubdivisions', 'MaxRows', 'MaxCols'); 
+  gui.addGlobals(
+    "NumRepeatCols",
+    "NumRepeatRows",
+    "MaxRowSubdivisions",
+    "MaxRows",
+    "MaxCols"
+  );
 
   sliderRange(1, 1000000, 1);
-  gui.addGlobals('Seed');
+  gui.addGlobals("Seed");
 
-  gui.addGlobals('MirrorCols')
+  gui.addGlobals("MirrorCols");
 
   noLoop();
 
@@ -119,33 +147,127 @@ async function setup() {
 
   await Clipper2ZFactory().then((loadedClipper2Z) => {
     console.log("loaded");
-    Clipper2Z = loadedClipper2Z
+    Clipper2Z = loadedClipper2Z;
     draw();
-  })
+  });
+}
+
+function reprocessCells({ voronoi, labels }) {
+  // Pick a random cell
+  // Find the neighbors
+  // Join to one of them if it hasn't already been squished to something
+  // Repeat until we decide to stop
+  // Do the same for all cells with the same label
+
+  const cellIndexToLabelMap = {};
+  for (let i = 0; i < labels.length; i++) {
+    cellIndexToLabelMap[i] = labels[i];
+  }
+
+  const labelToCellListMap = {};
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i];
+    if (!labelToCellListMap[label]) {
+      labelToCellListMap[label] = [];
+    }
+    labelToCellListMap[label].push(i);
+  }
+
+  const polygonUseMap = [];
+  const finalPolys = [];
+
+  function makeOneRun() {
+    const cells = [...voronoi.cellPolygons()];
+    const randomCellIndex = Math.floor(random(cells.length));
+    let currentCellIndex = randomCellIndex;
+    let polygonInProgress = makeClipperPathFromPointsArray(cells[randomCellIndex]);
+
+    if (polygonUseMap[randomCellIndex]) {
+      return;
+    }
+
+    polygonUseMap[randomCellIndex] = true;
+
+    let numJoinsPerformed = 0;
+    while (numJoinsPerformed < MaxJoins) {
+      const neighbors = voronoi.neighbors(randomCellIndex);
+      const unusedNeighbors = [
+        ...neighbors.filter((neighborIndex) => {
+          return !polygonUseMap[neighborIndex];
+        }),
+      ];
+      console.log({ neighbors, unusedNeighbors });
+
+      if (unusedNeighbors.length == 0) {
+        break;
+      }
+      // pick a random neighbor
+      const randomNeighborIndex = _.sample(unusedNeighbors);
+      polygonUseMap[randomNeighborIndex] = true;
+
+      console.log({ randomNeighborIndex }, cells[randomNeighborIndex]);
+
+      const clipperPath2 = makeClipperPathFromPointsArray(
+        cells[randomNeighborIndex]
+      );
+      const { FillRule, UnionD } = Clipper2Z;
+      polygonInProgress = UnionD(
+        polygonInProgress,
+        clipperPath2,
+        FillRule.NonZero,
+        2
+      );
+      console.log({ polygonInProgress });
+
+      numJoinsPerformed += 1
+
+      currentCellIndex = randomNeighborIndex;
+    }
+
+    const unionedPointsPath = getPointsArraysFromClipperPaths(polygonInProgress);
+
+    finalPolys.push(unionedPointsPath[0]);
+  }
+
+  makeOneRun();
+
+  finalPolys.forEach((poly) => {
+    console.log({ poly });
+    fill(0, 0, 100, 100);
+    beginShape();
+    for (let point of poly) {
+      vertex(point[0], point[1]);
+    }
+    endShape(CLOSE);
+  });
 }
 
 function draw() {
   if (!Clipper2Z) {
     return;
   }
-  
+
   randomSeed(Seed);
   noiseSeed(Seed);
 
   background(120);
   voronoiClearSites();
   const initialPoints = makeInitialVoronoiPoints();
-  const finalPoints = initialPoints.flatMap(([x, y]) => {
-    const points = maybeRepeatPoint({x, y});
+
+  let labels = [];
+  const finalPoints = initialPoints.flatMap(([x, y], index) => {
+    const { points, labels: newLabels } = maybeRepeatPoint({ x, y, index });
+    labels = labels.concat(newLabels);
     return points;
-  })
-  console.log({finalPoints})
+  });
+
+  console.log({ finalPoints });
 
   const delaunay = d3.Delaunay.from(finalPoints);
-  console.log({delaunay});
+  console.log({ delaunay });
   const voronoi = delaunay.voronoi([0, 0, CanvasWidth, CanvasHeight]);
-  const cells = voronoi.cellPolygons()
-  console.log({cells})
+  const cells = voronoi.cellPolygons();
+  console.log({ cells });
 
   let i = 0;
   for (let cell of cells) {
@@ -157,7 +279,7 @@ function draw() {
     }
     endShape(CLOSE);
 
-    // draw point 
+    // draw point
     const x = finalPoints[i][0];
     const y = finalPoints[i][1];
     fill(0, 0, 0);
@@ -165,51 +287,56 @@ function draw() {
 
     i++;
 
-    const clipperPath = makeClipperPathFromPointsArray(cell)
-    console.log({clipperPath})
-    const { InflatePathsD, JoinType, EndType } = Clipper2Z;
-    const deflated = InflatePathsD(clipperPath, -10, JoinType.Round, EndType.Polygon, 20, 0, 10);
-    console.log(deflated.size())
-    const shapes = getPointsArraysFromClipperPaths(deflated);
-    for (let shape of shapes) {
-      fill(0, 0, 100, 100);
-      beginShape();
-      for (let point of shape) {
-        vertex(point[0], point[1]);
-      }
-      endShape(CLOSE);
-    }
+    // const clipperPath = makeClipperPathFromPointsArray(cell)
+    // console.log({clipperPath})
+    // const { InflatePathsD, JoinType, EndType } = Clipper2Z;
+    // const deflated = InflatePathsD(clipperPath, -10, JoinType.Round, EndType.Polygon, 20, 0, 10);
+    // console.log(deflated.size())
+    // const shapes = getPointsArraysFromClipperPaths(deflated);
+    // for (let shape of shapes) {
+    //   fill(0, 0, 100, 100);
+    //   beginShape();
+    //   for (let point of shape) {
+    //     vertex(point[0], point[1]);
+    //   }
+    //   endShape(CLOSE);
+    // }
   }
 
+  reprocessCells({ voronoi, labels });
 }
 
 // Clipper Utility functions
 function makeClipperPathFromPointsArray(points) {
   const { PathsD, MakePathD } = Clipper2Z;
   const subject = new PathsD();
-  console.log(points.flat())
-  subject.push_back(MakePathD(points.flat()))
-  return subject
+  console.log(points.flat());
+  subject.push_back(MakePathD(points.flat()));
+  return subject;
 }
 
 function getPointsArraysFromClipperPaths(clipperPaths) {
-  const paths = []
+  const paths = [];
   const size = clipperPaths.size();
   for (let i = 0; i < size; i++) {
-    const path = getPointsArrayFromClipperPath(clipperPaths.get(i), color, closed);
-    paths.push(path)
+    const path = getPointsArrayFromClipperPath(
+      clipperPaths.get(i),
+      color,
+      closed
+    );
+    paths.push(path);
   }
-  return paths
+  return paths;
 }
 
 function getPointsArrayFromClipperPath(clipperPath) {
   const size = clipperPath.size();
-  console.log({size})
+  console.log({ size });
 
-  let points = []
+  let points = [];
   for (let i = 0; i < size; i++) {
-		const point = clipperPath.get(i);
-    points.push([point.x, point.y]); 
+    const point = clipperPath.get(i);
+    points.push([point.x, point.y]);
   }
   return points;
 }
