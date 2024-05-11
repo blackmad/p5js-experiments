@@ -18,7 +18,7 @@ var MirrorRows = true;
 
 var Seed = 99;
 
-
+var Clipper2Z;
 
 function drawCells() {
   // Draw NumRepeatCols x NumRepeatRows grid
@@ -101,7 +101,7 @@ function makeInitialVoronoiPoints() {
   return points;
 }
 
-function setup() {
+async function setup() {
   const gui = createGui('My awesome GUI');
   gui.setPosition(CanvasWidth + 100, 50);
 
@@ -116,9 +116,19 @@ function setup() {
   noLoop();
 
   createCanvas(CanvasWidth, CanvasHeight);
+
+  await Clipper2ZFactory().then((loadedClipper2Z) => {
+    console.log("loaded");
+    Clipper2Z = loadedClipper2Z
+    draw();
+  })
 }
 
 function draw() {
+  if (!Clipper2Z) {
+    return;
+  }
+  
   randomSeed(Seed);
   noiseSeed(Seed);
 
@@ -141,6 +151,7 @@ function draw() {
   for (let cell of cells) {
     fill(255, 255, 255);
     beginShape();
+
     for (let point of cell) {
       vertex(point[0], point[1]);
     }
@@ -153,9 +164,52 @@ function draw() {
     ellipse(x, y, 2, 2);
 
     i++;
+
+    const clipperPath = makeClipperPathFromPointsArray(cell)
+    console.log({clipperPath})
+    const { InflatePathsD, JoinType, EndType } = Clipper2Z;
+    const deflated = InflatePathsD(clipperPath, -10, JoinType.Round, EndType.Polygon, 20, 0, 10);
+    console.log(deflated.size())
+    const shapes = getPointsArraysFromClipperPaths(deflated);
+    for (let shape of shapes) {
+      fill(0, 0, 100, 100);
+      beginShape();
+      for (let point of shape) {
+        vertex(point[0], point[1]);
+      }
+      endShape(CLOSE);
+    }
   }
 
+}
 
-  // drawCells();
+// Clipper Utility functions
+function makeClipperPathFromPointsArray(points) {
+  const { PathsD, MakePathD } = Clipper2Z;
+  const subject = new PathsD();
+  console.log(points.flat())
+  subject.push_back(MakePathD(points.flat()))
+  return subject
+}
 
+function getPointsArraysFromClipperPaths(clipperPaths) {
+  const paths = []
+  const size = clipperPaths.size();
+  for (let i = 0; i < size; i++) {
+    const path = getPointsArrayFromClipperPath(clipperPaths.get(i), color, closed);
+    paths.push(path)
+  }
+  return paths
+}
+
+function getPointsArrayFromClipperPath(clipperPath) {
+  const size = clipperPath.size();
+  console.log({size})
+
+  let points = []
+  for (let i = 0; i < size; i++) {
+		const point = clipperPath.get(i);
+    points.push([point.x, point.y]); 
+  }
+  return points;
 }
